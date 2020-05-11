@@ -1,0 +1,294 @@
+---
+title: "Data Preparation"
+author: "Ashley Melanson"
+date: "May 11, 2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In summary, the housing dataset contains 31 different features and a total of 12,474 observations. 
+
+* 12,474 observations
+* 31 variables
+    + 14 factor variables
+    + 13 integer variables
+    + 4 numeric variables
+
+The data will be split in the following manner:
+
+(1) dtrain : containing 10,002 observations
+(2) dtest : containing 2,472 observations
+
+```{r include=FALSE}
+library(MASS)
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(Metrics)
+```
+
+```{r}
+# load the data
+load('final.Rdata')
+```
+
+## Splitting the Data
+
+```{r}
+dtrain <-
+  dat %>% filter(Usage == 'Training')
+dtrain$Id <- NULL
+
+dtest <-
+  dat %>% filter(Usage != 'Training')
+```
+
+Releveling the test set to hold same levels as training data. This should account for missing observation types in the test data after training different models.
+
+```{r}
+levels(dtest$EXTWALL) <- levels(dtrain$EXTWALL)
+levels(dtest$ZIPCODE) <- levels(dtrain$ZIPCODE)
+levels(dtest$GRADE) <- levels(dtrain$GRADE)
+levels(dtest$QUADRANT) <- levels(dtrain$QUADRANT)
+levels(dtest$CNDTN) <- levels(dtrain$CNDTN)
+levels(dtest$WARD) <- levels(dtrain$WARD)
+levels(dtest$HEAT) <- levels(dtrain$HEAT)
+levels(dtest$ROOF) <- levels(dtrain$ROOF)
+```
+
+## Missing Values
+
+```{r}
+# Missing Values
+isNA <- sapply(dat, function(x) sum(is.na(x)))
+isNA[isNA > 0]
+```
+
+**Missing at Random**
+
+* AYB: is the earliest time main portion was built, then every record should have an AYB
+* STORIES: Every household should have  equal to at least 1
+* KITCHENS: should be a number (even if that number is 0)
+* QUADRANT: is a geographical variable
+
+**Not Missing at Random**
+
+* YR_RMDL: possibility of house not being remodelled
+* ASSESSMENT_SUBNBHD: can be NA because there just may not be sub neighbourhoods available
+
+I made the decision not to use an imputation package to impute the missing values. This is largely due to the following reasons:
+
+(1) Computational Efficiency: from research, imputation of values are mostly useful for numerical variables. In this case, there was only AYB, YR_RMDL, STORIES, and KITCHENS.
+
+(2) The number of missing values in all of these columns (with the exception of YR_RMDL and ASSESSMENT_SUBNBHD) represented an extremely small proportion of the total observations.
+
+So without imputations, the missing values were dealt with in the following ways:
+
+(1) **AYB** : Based on the rest of the observations, it was found that the difference between EYB and AYB was approximately 30 years, on average.
+(2) **STORIES** : There is a factor variable STYLE that holds the number of stories
+(3) **KITCHENS*** : Since there was only 1 missing, this was dealt with naively and set to '1'
+(4) **QUADRANT** : Since this is difficult to derive from other variables, missing values were set to a new level called "NA"
+(5) **YR_RMDL** : Considering that it is NMAR, this variable is similar to that of EYB, and so missing values were set to EYB
+(6) **ASSESSMENT_SUBNBHD** : Considering that it is NMAR, missing values were set to their corresponding values in ASSESSMENT_NBHD
+
+```{r}
+
+
+  # converting missing values to level "NA"
+  dat$QUADRANT <- as.character(dat$QUADRANT)
+  dat$QUADRANT[is.na(dat$QUADRANT)] <- "NA"
+  dat$QUADRANT <- as.factor(dat$QUADRANT)
+
+  # converting missing values to level according to ASSESSMENT_NBHD
+  dat$ASSESSMENT_SUBNBHD <- as.character(dat$ASSESSMENT_SUBNBHD)
+  dat$ASSESSMENT_NBHD <- as.character(dat$ASSESSMENT_NBHD)
+  
+  dat$ASSESSMENT_SUBNBHD[is.na(dat$ASSESSMENT_SUBNBHD)] <-
+    dat$ASSESSMENT_NBHD[is.na(dat$ASSESSMENT_SUBNBHD)]
+  
+  dat$ASSESSMENT_SUBNBHD <- as.factor(dat$ASSESSMENT_SUBNBHD)
+  dat$ASSESSMENT_NBHD <- as.factor(dat$ASSESSMENT_NBHD)
+
+  # setting missing values to EYB
+  dat$YR_RMDL[is.na(dat$YR_RMDL)] <- dat$EYB[is.na(dat$YR_RMDL)]
+
+  # Check the subset of NA stories and use the STYLE to fill the values in
+  # dat[is.na(dat$STORIES),]
+  dat$STORIES[469] <- 2
+  dat$STORIES[3852] <- 2.5
+  dat$STORIES[6626] <- 2
+  dat$STORIES[10007] <- 2
+  dat$STORIES[11525] <- 2
+  dat$STORIES[11686] <- 2
+  dat$STORIES[11687] <- 2
+
+  # We replace our NA AYB values using this formula,
+  # 30 is the average distance between EYB and AYB
+  dat$AYB[is.na(dat$AYB)] <- dat$EYB[is.na(dat$AYB)] - 30
+
+  # Fix the missing Kitchen value
+  # dat[is.na(dat$KITCHENS),]
+  dat$KITCHENS[12393] <- 1
+```
+
+## Feature Preprocessing
+
+From my own knowledge about the housing market, I would intuitively think that newer houses lead to higher selling prices. There are a few reasons for this, one being the fact that the house being newer means it is more up to date and thus, more valuable, to buyers. Secondly, houses that are usually sold within a year of being built are most likely ones that were bought and sold to make a profit. So I attempted to introduce the following features to the dataset:
+
+(1) AGE_SOLD : SALEDATE - AYB
+(2) AGE_SOLD_2 : SALEDATE - EYB
+
+```{r}
+  # create new variable AGE_SOLD
+  dat$AGE_SOLD <- dat$SALEDATE - dat$AYB
+  
+  # create new variable AGE_SOLD_2
+  dat$AGE_SOLD_2 <- dat$SALEDATE - dat$EYB
+```
+
+Based on the plots below, it seems that there is some relationship between these new variables and the impact on PRICE. How important they become as predictors in the model, will be dependent on the statistical analysis.
+
+```{r fig.height=4, fig.width=12}
+par(mfrow=c(1,2))
+plot(dat$AGE_SOLD, dat$PRICE, pch=16, cex=0.6, xlab="AGE_SOLD", ylab="PRICE", main="AGE_SOLD vs. PRICE")
+plot(dat$AGE_SOLD_2, dat$PRICE, pch=16, cex=0.6, xlab="AGE_SOLD_2", ylab="PRICE", main="AGE_SOLD_2 vs. PRICE")
+```
+
+Straight off the bat, there are a couple of variables that stand out from the dataset as potential problems in model fitting.
+
+(1) Factor variables like GRADE and CNDTN need to be releveled. While this won't make a difference in some model fits, it's especially important in model fits like random forests and boosting. As an example, we look at GRADE before and after:
+
+```{r fig.height=4, fig.width=14}
+boxplot(PRICE~GRADE,data=dat,main="PRICE ~ GRADE", xlab = 'GRADE', ylab = 'PRICE',
+        cex.axis=0.8, ylim = c(0,1.5e+07), col="grey",border="black")
+```
+
+```{r}
+dat$CNDTN = factor(dat$CNDTN, levels = c('Poor', 'Fair', 'Average', 'Good',
+                                               'Very Good', 'Excellent'), ordered=TRUE)
+  
+dat$GRADE = factor(dat$GRADE,
+                      levels = c("Low Quality", "Fair Quality", "Average",
+                                  "Above Average", "Good Quality", "Very Good",
+                                  "Excellent", "Superior", "Exceptional-A", "Exceptional-B",
+                                 "Exceptional-C", "Exceptional-D"), ordered=TRUE)
+
+```
+
+```{r fig.height=4, fig.width=14}
+boxplot(PRICE~GRADE,data=dat,main="PRICE ~ GRADE", xlab = 'GRADE', ylab = 'PRICE',
+        cex.axis=0.8, ylim = c(0,1.5e+07), col="grey",border="black")
+```
+
+(2) SALEDATE is a factor variable with 4938 levels. Not only is this too many levels, date variables are more useful for time series purposes. This gives us an indication that the variable needs to be converted to some type of numeric.
+
+(3) ZIPCODE is an integer variable. Through context, ZIPCODE is supposed to represent geographical areas, and thus makes more sense to be represented through a categorical variable.
+
+```{r}
+  # SALEDATE should be converted to year/int rather than factor
+  dat$SALEDATE <- as.integer(substr(dat$SALEDATE,1,4))
+  
+  # ZIPCODE should be converted to a factor
+  dat$ZIPCODE <- as.factor(dat$ZIPCODE)
+```
+
+(4) PRICE needs a log transformation, due to its skewed distribution. As seen in the plots below, the plot on the left shows the Residuals vs. Predicted Values from a simple regression model using lm(), with no log transformation on the price. The problem here is that there seems to be a pattern in the plot. After applying the log transformation, we see that the plot on the right seems to show some improvement. Although, there is some indication of a pattern, most likely due to outliers.
+
+```{r}
+model <- lm(PRICE ~ GBA + ROOMS + EYB, data=dat)
+log.model <- lm(log(PRICE) ~ GBA + ROOMS + EYB, data=dat)
+```
+
+```{r fig.width=12, fig.height=4}
+par(mfrow=c(1,2))
+Residuals = residuals(model) #extracting the residulas
+y.hat <- fitted(model) # calculating y.hat, the fitted values
+#plotting the residuals vs. fitted values
+plot(Residuals~y.hat, xlab = 'Predicted Values', main = 'Standard Model') 
+
+Residuals = residuals(log.model) #extracting the residulas
+y.hat <- fitted(log.model) # calculating y.hat, the fitted values
+#plotting the residuals vs. fitted values
+plot(Residuals~y.hat, xlab = 'Predicted Values', main = 'Model with Log Transform on PRICE') 
+```
+
+(5) GBA and LANDAREA also needed log transformations. When we look at their original disitributions, they are highly skewed.
+
+```{r  fig.height=5, fig.width=10}
+par(mfrow=c(2,2))
+hist(dat$GBA, xlab = 'GBA', main = 'Histogram of GBA')
+hist(log(dat$GBA), xlab = 'log(GBA)', main = 'Histogram of log(GBA)')
+
+hist(dat$LANDAREA, xlab = 'LANDAREA', main = 'Histogram of LANDAREA')
+hist(log(dat$LANDAREA), xlab = 'log(LANDAREA)', main = 'Histogram of log(LANDAREA)')
+```
+
+```{r}
+  # create new log variables
+  dat$LOG.GBA <- log(dat$GBA)
+  dat$LOG.LANDAREA <- log(dat$LANDAREA)
+```
+
+
+We also have some geographic features in the dataset. We see a plot of LATITUDE vs LONGITUDE coordinates, coloured by PRICE. We see that higher values of the PRICE are seen in the top left area, while lowest values of PRICE are seen in the center-bottom area. We will most likely see that these areas correspond to other geographical predictors like ZIPCODE and ASSESSMENT_NBHD.
+
+```{r fig.height=4, fig.width=10}
+theme_set(theme_bw())
+ggplot(dat , aes(x = LATITUDE, y = LONGITUDE, color = log(PRICE))) +
+geom_point(alpha = 0.7) +
+scale_color_distiller(palette = "Paired") +
+ggtitle("LATITUDE vs. LONGITUDE")
+```
+
+```{r}
+  # create the sorted dataframe
+  nbhd_df <-
+  dat %>%
+    group_by(ASSESSMENT_NBHD) %>%
+    summarise_at(vars(PRICE), list(mean)) %>% arrange(PRICE)
+  
+  # order the variable based on the new dataframe
+  dat$ASSESSMENT_NBHD <-
+    factor(dat$ASSESSMENT_NBHD,
+           levels=unique(nbhd_df$ASSESSMENT_NBHD[order(nbhd_df$PRICE)]),
+           ordered=TRUE)
+  
+  # create the sorted dataframe
+  subnbhd_df <-
+  dat %>%
+    group_by(ASSESSMENT_SUBNBHD) %>%
+    summarise_at(vars(PRICE), list(mean)) %>% arrange(PRICE)
+  
+  # order the variable based on the new dataframe
+  dat$ASSESSMENT_SUBNBHD <-
+    factor(dat$ASSESSMENT_SUBNBHD,
+           levels=unique(subnbhd_df$ASSESSMENT_SUBNBHD[order(subnbhd_df$PRICE)]))
+  
+  # create the sorted dataframe
+  zipcode_df <-
+  dat %>%
+    group_by(ZIPCODE) %>%
+    summarise_at(vars(PRICE), list(mean)) %>% arrange(PRICE)
+  
+  # order the variable based on the new dataframe
+  dat$ZIPCODE <-
+    factor(dat$ZIPCODE,
+           levels=unique(zipcode_df$ZIPCODE[order(zipcode_df$PRICE)]),
+           ordered=TRUE)
+  
+  # create the sorted dataframe
+  extwall_df <-
+  dat %>%
+    group_by(EXTWALL) %>%
+    summarise_at(vars(PRICE), list(mean)) %>% arrange(PRICE)
+  
+  # order the variable based on the new dataframe
+  dat$EXTWALL <-
+    factor(dat$EXTWALL,
+           levels=unique(extwall_df$EXTWALL[order(extwall_df$PRICE)]),
+           ordered=TRUE)
+```
+
