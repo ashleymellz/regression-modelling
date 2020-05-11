@@ -1,0 +1,29 @@
+PRICE: response
+BATHRM: # bathrooms
+HF_BATHRM: # half bathrooms
+HEAT: heating
+AC: air conditioning
+ROOMS: # rooms
+BEDRM: # bedrooms
+AYB: The earliest time the main portion of the building was built
+YR_RMDL: Year structure was remodeled
+EYB: The year an improvement was built more recent than actual year built
+STORIES: # stories in primary dwelling
+SALEDATE: Date of most recent sale
+GBA: Gross building area in square feet
+STYLE
+GRADE
+CNDTN: Condition
+EXTWALL: Exterior wall
+ROOF: Roof type
+INTWALL: Interior wall
+KITCHENS: # kitchens
+FIREPLACES: # fireplaces
+LANDAREA: Land area of property in square feet
+ZIPCODE
+LATITUDE
+LONGITUDE      
+ASSESSMENT_NBHD: Neighborhood ID
+ASSESSMENT_SUBNBHD: sub-neighborhood
+WARD: Ward (District is divided into eight wards, each with approximately 75,000 residents)
+QUADRANT
