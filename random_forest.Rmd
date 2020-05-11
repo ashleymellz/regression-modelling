@@ -1,0 +1,150 @@
+---
+title: "Random Forest"
+author: "Ashley Melanson"
+date: "May 11, 2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+# load libraries
+library(MASS)
+library(Metrics)
+library(ggplot2)
+library(interactions)
+library(dplyr)
+library(tidyverse)
+library(ranger)
+library(outForest)
+```
+
+## Random Forest Methods
+
+Random Forests work by taking a random sample of k predictors at each split in the decision tree(s), while also taking random sample of training data. The reason why this is useful, is because it solves the problem of multi-collinearity among predictors. A random forest model must be complex enough to fit trends in the housing data, however it must be general enough so that it doesn't overfit to the training data. Based on a grid search of parameters, the optimal number of trees generated seemed to sit around 800-1000. Unfortunately, the interpretability of this method is similar to that of a black box-- you won't always be able to explain what predictors were weighted more heavily when coming up with a single housing price prediction.
+
+In terms of computation time, random forest works very well. The `ranger` package provides a fast implementation of the random forest model, and is suited for high dimensional data and parameter tuning. The computation time, does however, increase with the number of trees grown.
+
+This method also allows us to easily track how important a feature is (based on the an index changing as the trees grow deeper). The importance is only as useful as the accuracy of the model. If the prediction error of the model is very large, the variable importance loses credibility.
+
+### Model Tuning
+
+```{r}
+# this is a dataframe with just the features of interest
+model_df <- dtrain %>%
+                  select(ROOMS, SALEDATE, AGE_SOLD, AGE_SOLD_2, YR_RMDL, WARD, BATHRM, HF_BATHRM,
+                         GBA, EYB, AYB, BEDRM, LATITUDE, LONGITUDE, LANDAREA, FIREPLACES, STORIES,
+                         ZIPCODE, HEAT, ROOF, GRADE, EXTWALL, CNDTN, QUADRANT, AC)
+
+```
+
+We conduct a random forest cross validation in with 5 folds in order to check the optimal number of predictors in the model. Since this takes awhile to run, I will not be showing the plot output. Based on the plot, we see that the optimal number sits around 12 to 15 predictors. However, it doesn't seem to move much once it goes beyond 15.
+
+```{r eval=FALSE, include=TRUE}
+model.rfcv <- rfcv(trainx = model_df, trainy = dtrain$PRICE, cv.fold = 5)
+
+with(model.rfcv, plot(n.var, error.cv, pch = 19, type="b", col="blue"))
+```
+
+We try to look at the importance of the predictors to remove the least important ones. We use ranger because it's a faster implementation, and can handle the number of levels found in ASSESSMENT_NBHD and ASSESSMENT_SUBNBHD. We do this based on default parameters.
+
+As a note: mtry = 1000 was chosen based on manual checks. After a certain point, the prediction error was not improving after about 800-1000 trees.
+
+We will now do a hypergrid search to find the optimal values for our parameters, based on the chosen predictors.
+
+```{r}
+hyper_grid <- expand.grid(
+  mtry = seq(7,20, by = 2),
+  node_size = seq(3,9, by = 2),
+  sample_size = c(0.632, 0.8, 1),
+  OOB_RMSE = 0
+)
+
+nrow(hyper_grid)
+```
+
+Since the processing time is slow, I will not run the code below. However it shows that the optimal values for paramters are:
+
+* mtry = 11
+* min.node.size = 7
+* sample.fraction = 1.00
+
+```{r eval=FALSE, include=TRUE}
+for(i in 1:nrow(hyper_grid)) {
+  
+  # train model
+  model <- ranger(log(PRICE) ~ ROOMS + SALEDATE + AGE_SOLD + AGE_SOLD_2 +
+                    YR_RMDL + WARD + BATHRM + GBA + LANDAREA + FIREPLACES + EYB +
+                    AYB + BEDRM + LATITUDE + LONGITUDE + ZIPCODE + GRADE + CNDTN +
+                    ASSESSMENT_NBHD + ASSESSMENT_SUBNBHD,
+                   data=dtrain,
+                   num.trees=1000,
+                   mtry = hyper_grid$mtry[i],
+                   min.node.size = hyper_grid$node_size[i],
+                   sample.fraction = hyper_grid$sample_size[i]
+                  )
+  # add OOB error to grid
+  hyper_grid$OOB_RMSE[i] <- sqrt(model$prediction.error)
+}
+
+hyper_grid %>% 
+  dplyr::arrange(OOB_RMSE) %>%
+  head(10)
+```
+
+### Final Model
+
+The final random forest model is as follows, with RMSLE score of:
+
+* dtest : 0.1854605
+
+```{r eval=FALSE}
+  rf.model <- ranger(log(PRICE) ~ BATHRM + HF_BATHRM + HEAT + AC + ROOMS +
+                       BEDRM + ZIPCODE + AYB + EYB + YR_RMDL + SALEDATE +
+                       LOG.GBA + STYLE + GRADE + CNDTN + ZIPCODE + LATITUDE +
+                       LONGITUDE + ROOF + FIREPLACES + LOG.LANDAREA + ASSESSMENT_NBHD +
+                       ASSESSMENT_SUBNBHD + AGE_SOLD + AGE_SOLD_2 + WARD + QUADRANT,
+                       data=dtrain,
+                       num.trees=1000,
+                       mtry = 11,
+                       min.node.size = 7,
+                       sample.fraction = 1.00,
+                       importance = 'impurity')
+```
+
+```{r eval=FALSE}
+pred <- predict(rf.model, data=dtest)
+rmsle(dtest$PRICE, exp(pred$predictions))
+```
+
+Below is a list of the top 10 most importance variables to the random forest model. Unfortunately, the score is not always so intuitive in terms of interpretability. In fact, some variables scored as least important, ended up improving the prediction accuracy of the model.                   
+                       
+Feature             | Variable Importance Score
+------------------  | -------------
+SALEDATE            |  1560.48
+ASSESSMENT_SUBNBHD  |  1246.89
+ASSESSMENT_NBHD     |  865.94
+LONGITUDE           |  574.39
+LOG.GBA             |  443.38
+GRADE               |  347.46
+BATHRM              |  228.12
+EYB                 |  218.77
+ZIPCODE             |  207.14
+YR_RMDL             |  104.00
+
+```{r}
+ranger::importance(rf.model) %>% sort(decreasing=T)
+```
+
+
+
+
+
+
+
+
+
+
+

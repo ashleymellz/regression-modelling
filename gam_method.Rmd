@@ -1,0 +1,110 @@
+---
+title: "GAM Methods"
+author: "Ashley Melanson"
+date: "May 11, 2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+# load libraries
+library(MASS)
+library(Metrics)
+library(ggplot2)
+library(interactions)
+library(dplyr)
+library(tidyverse)
+library(mgcv)
+```
+
+## Feature Selection and Reduction
+
+For the most part, the subset of predictors that were most relevant to the model stayed relatively the same across different fitting methods. However, there were some predictors that became more useful or less useful depending on the method chosen. This piece will be discussed in detail in the statistical analysis section, and we will instead discuss the general selection or elimination methods used.
+
+**Backwards Elimination using stepAIC**
+
+AIC = -35210.68
+
+```{r eval=FALSE}
+simple.model <- lm(log(PRICE) ~ BATHRM + HF_BATHRM + HEAT + AC + ROOMS + BEDRM + 
+                     AYB + YR_RMDL + EYB + SALEDATE + GBA + STYLE + GRADE + CNDTN + ZIPCODE +
+                     ROOF + FIREPLACES + LANDAREA + ASSESSMENT_NBHD + ASSESSMENT_SUBNBHD + 
+                     WARD + QUADRANT, data=dtrain)
+```
+    
+Straight off the bat, we've eliminated the following predictors for the linear model:
+
+* KITCHENS
+* EXTWALL
+* INTWALL
+* LATITUDE
+* LONGITUDE
+* AGE_SOLD
+* AGE_SOLD_2
+
+However, as mentioned, some of these predictors ended up improving the RMSLE for smoothing and/or random forest methods. Not surprisingly, EXTWALL and INTWALL did not hold much weight when improving prediction error. These are categorical variables, and knowledge from the housing market suggests that interior and exterior materials have a much smaller influence on housing prices.
+
+## GAM Methods
+
+The general additive model is probably the most intuitive one to understand in terms of the fitting process. As we saw from the plots earlier in the earlier sections, there was indication of relationships between different variables and the PRICE of the house. However, many of these relationships violated linear assumptions, which is a major issue when using simple regression.
+
+This also means, that variables that were originally flagged as useless to the model, could be very useful for future models such as the general additive model (GAM). GAM allows us to apply individual smooth functions to each continuous variable, so in essence, imagine fitting individual smooth curves (based on the relationship coming from each predictor) to the response variable, log(PRICE). Not only does this allow the model to get rid of the linearity assumption, but by doing so we minimize the residuals, and thus the prediction error.
+
+In terms of computation time, it is relatively decent, as it does need time to fit individual smoothing functions to the predictors specified. This time is of course increased as the number of smoothing functions increases, and the number of tensor products increase.
+
+GAM also makes use of regularlization to avoid overfitting. We can control the 'wriggleness' of these smooth functions to account for any noise. For example, when we look at SALEDATE in figure 7, we can see that it almost oscilates. This is most likely due to the volatility in the housing market, as prices will fluctuate depending on many economic factors. In fact, we can also see dips in the PRICE where there would have been economic recessions. Ideally, we want the smooth function to pick up on this noise, and this is done by setting the number of knots for each smoothing function.
+
+### Interaction Analysis
+
+```{r eval=FALSE}
+interact.model <- lm(log(PRICE) ~ BATHRM + HF_BATHRM + HEAT + AC + ROOMS +
+                       BEDRM + LATITUDE*LONGITUDE + AYB + EYB + YR_RMDL +
+                       SALEDATE + log(GBA) + STYLE + GRADE + CNDTN + ZIPCODE +
+                       EYB:AYB + EYB:SALEDATE + ROOF + FIREPLACES + log(LANDAREA) +
+                       ASSESSMENT_NBHD + ASSESSMENT_SUBNBHD + WARD + QUADRANT,
+                     data=dtrain)
+```
+
+We see that in the ANOVA table below, from the interaction model, that the interaction terms EYB:AYB, EYB:SALEDATE, and LATITUDE:LONGITUDE are significant. So we include them as tensor products, ti() terms, inside the smoothing model. However, it will be noted that these terms only brought marginal improvements to the prediction error. Indiciating that while there is indication of an interaction effect on the housing price, the interaction effect could be outweighed by other sources of error such as possible outliers or skewness in the individual smoothing functions.
+
+```{r}
+anova(interact.model)
+```
+
+### Final Model
+
+The final smoothing model is as follows, with RMSLE scores of:
+
+* dtest : 0.1822605
+
+```{r eval=FALSE}
+smooth.model <- gam(log(PRICE) ~ s(SALEDATE, k=27) + s(LOG.GBA, k=20) + s(AYB, k=100) +
+                      s(EYB, k=75) + ti(EYB,AYB) + s(HF_BATHRM, k=6) +  s(KITCHENS, k=4) +
+                      s(ROOMS) + s(LOG.LANDAREA) + s(YR_RMDL) + s(FIREPLACES) + s(LATITUDE) +
+                      s(LONGITUDE) + ti(LATITUDE,LONGITUDE) + ti(EYB,SALEDATE) + s(BEDRM) +
+                      s(BATHRM) + s(STORIES) + s(AGE_SOLD, k=75) + s(AGE_SOLD_2) + WARD + 
+                      ZIPCODE + HEAT + ROOF + GRADE + CNDTN + QUADRANT + ASSESSMENT_NBHD +
+                      AC + ASSESSMENT_SUBNBHD + EXTWALL,
+                      data=dtrain)
+```
+
+```{r eval=FALSE}
+rmsle(dtest$PRICE, exp(predict(smooth.model, newdata=dtest)))
+```
+
+Based on the plots below in figure 9, we see that the model follows normal distribution of the residuals, and we see that from the upper right plot that The that the variance is mostly constant as the mean price increases. We also see a positive linear relationship with some scatter in the bottom right plot. This is good, however it means most of the residual errors are coming from predictions of housing prices on the lower end.
+
+```{r fig.width=10}
+par(mfrow=c(2,2))
+gam.check(smooth.model)
+```
+
+To note, a problem with GAM is that we must now think of outliers on the individual predictor level. What this means, is that an observation could be an outlier for one predictor function, but may not be an outlier for another predictor function. So the smooth function created for that predictor, could be skewed to give strange results. As a result, GAM can be very sensitive to outliers.
+
+Overall, smoothing methods provided very good results in terms of interpretability, useability, computation time, and prediction accuracy.
+
+
+
