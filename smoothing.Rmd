@@ -1,0 +1,209 @@
+---
+title: "Project Smoothing"
+author: "Ashley Melanson, 20615537"
+date: "February 25, 2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In summary, I found that the mgcv package was most useful, leveraging the gam function and it's different parameter functions like the smoother and tensor products. I found that loess, locfit, and locpoly functions were not useful as I increased the number of predictors in my model. However, they were sometimes useful when looking at individual predictors against the housing price.
+\
+
+My main methods of model validation included plotting smoothing splines, boxplots, looking at the gcv score, AIC, and the rmsle score on the training set. In terms of missing values, most NA values were filled using values from other columns.
+\
+
+I had a public score of 0.18710 (Rank 3) and a private score of 0.17714 (Rank 10).
+
+```{r include=FALSE}
+library(ggplot2)
+library(splines)
+library(tidyverse)
+library(dplyr)
+library(mgcv)
+library(Metrics)
+```
+
+
+```{r}
+# Load the data in
+dtrain <- read.csv("house_train.csv")
+dtest <- read.csv("house_test.csv")
+```
+
+# DATA PRE-PROCESSING STAGE
+
+```{r}
+  # SALEDATE should be converted to year/int rather than factor
+  dtrain$SALEDATE <- as.integer(substr(dtrain$SALEDATE,1,4))
+  dtest$SALEDATE <- as.integer(substr(dtest$SALEDATE,1,4))
+  
+  # ZIPCODE should be converted to a factor
+  dtrain$ZIPCODE <- as.factor(dtrain$ZIPCODE)
+  dtest$ZIPCODE <- as.factor(dtest$ZIPCODE)
+```
+
+Missing at Random
+\
+(1) AYB is the earliest time main portion was built, then every record should have an AYB.
+\
+(3) Every record should have number of STORIES
+\
+(5) QUADRANT
+\
+Not Missing at Random
+\
+(2) YR_RMDL - possibility of house not being remodelled, this could 
+\
+(4) ASSESSMENT_SUBNBHD can be NA because there just may not be sub neighbourhoods available. If we use the neighbourhood, this additional variable might not add more accuracy.
+
+```{r}
+# Missing Values - Counts
+isNA <- sapply(dtrain, function(x) sum(is.na(x)))
+isNA[isNA > 0]
+
+# Missing Values - Percentage
+isNA <- sapply(dtest, function(x) sum(is.na(x)))
+isNA[isNA > 0]
+
+```
+
+We want to fill some of the NA values... since a lot of the missing data is from categorical variables, I had to find a more creative way of filling them in. 
+\
+
+(1) I decided to create a level called "NA" in the QUADRANT variable
+\
+(2) Based on my earlier assumption of missing ASSESSMENT_SUBNBHD values, I assigned them to their respective ASSESSMENT_NBHD values
+\
+(3) By definition of EYB and YR_RMDL, I felt the closest value for YR_RMDL was EYB
+\
+(4) We replace the STORIES using the values specified in STYLE
+\
+(5) We replace the missing AYB values using the EYB - the average difference - which happened to be 30 years
+
+```{r}
+  dtrain$QUADRANT <- as.character(dtrain$QUADRANT)
+  dtrain$QUADRANT[is.na(dtrain$QUADRANT)] <- "NA"
+  dtrain$QUADRANT <- as.factor(dtrain$QUADRANT)
+  
+  dtrain$ASSESSMENT_SUBNBHD <- as.character(dtrain$ASSESSMENT_SUBNBHD)
+  dtrain$ASSESSMENT_NBHD <- as.character(dtrain$ASSESSMENT_NBHD)
+  
+  dtrain$ASSESSMENT_SUBNBHD[is.na(dtrain$ASSESSMENT_SUBNBHD)] <-
+    dtrain$ASSESSMENT_NBHD[is.na(dtrain$ASSESSMENT_SUBNBHD)]
+  
+  dtrain$ASSESSMENT_SUBNBHD <- as.factor(dtrain$ASSESSMENT_SUBNBHD)
+  dtrain$ASSESSMENT_NBHD <- as.factor(dtrain$ASSESSMENT_NBHD)
+  
+  
+  dtrain$YR_RMDL[is.na(dtrain$YR_RMDL)] <- dtrain$EYB[is.na(dtrain$YR_RMDL)]
+  
+  dtrain$STORIES[469] <- 2
+  dtrain$STORIES[3852] <- 2.5
+  dtrain$STORIES[6626] <- 2
+
+  # missing values must be less than EYB
+  # Tells us that the average difference in EYB and AYB is 30 years.
+  # tdata <- subset(dtrain, !is.na(dtrain$AYB))
+  # mean(tdata$EYB - tdata$AYB)
+  
+  # We replace our NA AYB values using this formula
+  dtrain$AYB[is.na(dtrain$AYB)] <- dtrain$EYB[is.na(dtrain$AYB)] - 30
+```
+
+I wanted to investigate YR_RMDL before deciding to remove from the dataset and not using it in my model. We can see from the output below that it is significant to the model and could be promising. There is also a plot below that shows a positive relationship with price. 
+
+```{r}
+tdata <- filter(dtrain, dtrain$PRICE != 22000000)
+tdata <- tdata %>% drop_na(YR_RMDL)
+
+# it seems to have some significance
+test.model <- lm(PRICE ~ bs(YR_RMDL, degree=1), data=tdata)
+summary(test.model)
+```
+
+```{r}
+
+plot(x=tdata$YR_RMDL, y=tdata$PRICE, pch=16, cex=0.6)
+# B spline
+lines(x=tdata$YR_RMDL, y=predict(test.model))
+```
+
+I also created two new variables, off the intuition that some houses may be sold at a higher price (due to profit) because they were build and sold within a smaller amount of time. It turns out that when I included these as predictors in my model, they decreased the model rmsle.
+
+```{r}
+  dtrain$AGE_SOLD <- dtrain$SALEDATE - dtrain$AYB
+  
+  dtrain$AGE_SOLD_2 <- dtrain$SALEDATE - dtrain$EYB
+```
+
+# MODEL BUILDING PROCESS
+
+I wanted to see if these two variables could show some sort of relationship with price, we some sort of relationship with price, and so I included these predictors in my model.
+
+```{r}
+par(mfrow=c(1,2))
+plot(dtrain$AGE_SOLD, dtrain$PRICE, pch=16, cex=0.6)
+plot(dtrain$AGE_SOLD_2, dtrain$PRICE, pch=16, cex=0.6)
+```
+
+Again, I checked the relationships for ordered factor variables like GRADE and CNDTN. Just like in the linear model, these could show promising results in the final model. They were both useful in that linear model.
+```{r}
+par(mfrow=c(1,2))
+boxplot(PRICE~GRADE,data=dtrain,main="PRICE ~ GRADE",col="orange",border="brown")
+
+boxplot(PRICE~CNDTN,data=dtrain,main="PRICE ~ CNDTN",col="orange",border="brown")
+```
+
+I notice that SALEDATE has many sudden changes in the PRICE. This makes sense as the housing market is very volatile-- changes from year to year. This will most likely mean a higher number of knots in my smoother model.
+
+```{r, fig.width=5, fig.height=3}
+# we notice a quadratic pattern but it could be affected by density
+pairs(~ PRICE + SALEDATE, pch=16, col=adjustcolor("firebrick",0.4), data=dtrain)
+```
+
+# FINAL MODEL
+Many of the variables that were useful predictors in my linear model, ended up being useful in this smoother model. However, my approach with placing them in the model followed this strategy: 
+\
+
+(1) All continuous variables were smoothed using the s() method 
+\
+(2) All factor variables were left as linear terms
+\
+(3) To minimize processing power, I would set the smoothing method to cubic regression spline 'cr' as noted in the documentation of gam()
+\
+(4) I would continuously check the gam.check() function to see if my knots were too high or too low and then increase or decrease accordingly.
+\
+
+A couple of notes here: for SALEDATE I specifically increased the number of knots to the approx. the number of years in the range. I also did this for variables like AGE_SOLD, AGE_SOLD2, and AYB. \
+
+(5) I added tensor interactions between variables that showed evidence of interaction (through interaction plots) from my linear model. The big ones were: EYB and AYB, AYB and GBA, STORIES and GBA. However these added fractional value to my overall model.
+
+
+```{r}
+# FINAL MODEL
+final.model <- mgcv::gam(log(PRICE) ~ s(ROOMS, bs = 'cr') + s(SALEDATE, bs = 'cr', k=27) +
+                     s(AGE_SOLD, bs="cr", k=50) + s(AGE_SOLD_2, bs="cr", k=50) +
+                     s(LANDAREA, bs = 'cr') + ti(EYB,AYB) + s(YR_RMDL) + WARD + ti(AYB,GBA) +
+                     ti(STORIES,GBA) + te(LATITUDE,LONGITUDE) + s(GBA, k=20) + s(FIREPLACES) + 
+                     s(BATHRM, bs = 'cr') + s(HF_BATHRM, k=6) + s(EYB) + s(AYB, bs="cr", k=100) +
+                     s(KITCHENS, k=4) + s(STORIES, bs = 'cr') + s(BEDRM, bs = 'cr') + s(LATITUDE) + 
+                     s(LONGITUDE) + ZIPCODE + HEAT + ROOF + GRADE + EXTWALL + CNDTN + QUADRANT +
+                     ASSESSMENT_NBHD + AC + ASSESSMENT_SUBNBHD, data=dtrain)
+
+```
+
+In terms of validation methods, I would use the GCV score provided to see if it decreased and the AIC score as well to see if it decreased.
+
+```{r}
+par(mfrow=c(2,2))
+gam.check(final.model)
+```
+
+```{r}
+rmsle(exp(final.model$fitted.values), exp(final.model$y))
+
+AIC(final.model)
+```
